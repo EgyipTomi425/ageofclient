@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity, ArrowRight, ArrowUpRight, Award, CalendarDays,
   Check, ChevronDown, Clock3, Filter, Gamepad2, Languages, Map,
@@ -7,19 +7,8 @@ import {
 } from 'lucide-react';
 import Analytics from './Analytics.jsx';
 import MatchGameDetails from './MatchGameDetails.jsx';
+import { apiRequest } from './api.js';
 import { TranslationLayer, translateText, useLanguage } from './i18n.js';
-
-const API = '/age3ofserver/api';
-
-async function request(path, options) {
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-  return data;
-}
 
 function dateLabel(value, withTime = false, language = 'hu') {
   if (!value) return 'Időpont egyeztetés alatt';
@@ -104,7 +93,7 @@ function App() {
   async function loadDashboard() {
     setLoading(true);
     try {
-      const data = await request('/dashboard');
+      const data = await apiRequest('/dashboard', {}, { enabled: true, ttlMs: 15000 });
       setDashboard(data);
       setSelectedId((current) => current ?? data.tournaments[0]?.id ?? null);
     } catch (error) {
@@ -117,7 +106,7 @@ function App() {
   async function loadDetail(id) {
     if (!id) return setDetail(null);
     try {
-      setDetail(await request(`/tournaments/${id}`));
+      setDetail(await apiRequest(`/tournaments/${id}`, {}, { enabled: true, ttlMs: 15000 }));
     } catch (error) {
       setNotice({ kind: 'error', text: error.message });
     }
@@ -140,7 +129,7 @@ function App() {
     const form = new FormData(event.currentTarget);
     try {
       if (dialog.type === 'tournament') {
-        await request('/tournaments', {
+        await apiRequest('/tournaments', {
           method: 'POST',
           body: JSON.stringify({
             name: form.get('name'), format: form.get('format'),
@@ -154,14 +143,14 @@ function App() {
         setNotice({ kind: 'success', text: 'A torna létrejött.' });
         setPage('tournaments');
       } else if (dialog.type === 'entry') {
-        await request(`/tournaments/${dialog.tournamentId}/entries`, {
+        await apiRequest(`/tournaments/${dialog.tournamentId}/entries`, {
           method: 'POST',
           body: JSON.stringify({ handle: form.get('handle'), country: form.get('country').toUpperCase(), civilization: form.get('civilization') }),
         });
         setNotice({ kind: 'success', text: 'A nevezés rögzítve.' });
       } else if (dialog.type === 'match') {
         const playerIds = Array.from(form.getAll('playerIds'), Number);
-        await request(`/tournaments/${dialog.tournamentId}/matches`, {
+        await apiRequest(`/tournaments/${dialog.tournamentId}/matches`, {
           method: 'POST',
           body: JSON.stringify({
             round: form.get('round'), mapName: form.get('mapName'),
@@ -175,7 +164,7 @@ function App() {
         const participants = Array.from(event.currentTarget.querySelectorAll('[data-score-player]'), (input) => ({
           playerId: Number(input.dataset.scorePlayer), score: Number(input.value),
         }));
-        await request(`/matches/${dialog.match.id}/result`, {
+        await apiRequest(`/matches/${dialog.match.id}/result`, {
           method: 'POST', body: JSON.stringify({ mapName: form.get('mapName'), participants }),
         });
         setNotice({ kind: 'success', text: 'Az eredmény mentve.' });
@@ -196,19 +185,40 @@ function App() {
   const playerLookup = Object.fromEntries(allPlayers.map((player) => [player.id, player]));
   const mapOptions = [...new Set(allMatches.map((match) => match.mapName).filter(Boolean))].sort();
   const civOptions = [...new Set(allPlayers.map((player) => player.civilization).filter(Boolean))].sort();
-  const filteredTournaments = tournaments.filter((item) => `${item.name} ${item.format}`.toLowerCase().includes(search.toLowerCase()));
-  const matchesBySelectedFilters = (match) => {
-    const mapMatch = mapFilter === 'all' || match.mapName === mapFilter;
-    const civMatch = civFilter === 'all' || match.participants.some((participant) => (playerLookup[participant.id]?.civilization ?? '') === civFilter);
-    const playerMatch = playerFilter === 'all' || match.participants.some((participant) => Number(participant.id) === Number(playerFilter));
-    return mapMatch && civMatch && playerMatch;
-  };
-  const upcomingMatches = allMatches.filter((item) => item.status !== 'completed' && matchesBySelectedFilters(item));
-  const overviewMatches = upcomingMatches.slice(0, 3);
-  const filteredScheduleMatches = allMatches.filter((match) => {
-    const searchMatch = !search || `${match.round} ${match.mapName} ${match.tournament ?? ''}`.toLowerCase().includes(search.toLowerCase());
-    return searchMatch && matchesBySelectedFilters(match);
-  });
+  const filteredTournaments = useMemo(
+    () => tournaments.filter((item) => `${item.name} ${item.format}`.toLowerCase().includes(search.toLowerCase())),
+    [search, tournaments],
+  );
+
+  const matchesBySelectedFilters = useMemo(
+    () => (match) => {
+      const mapMatch = mapFilter === 'all' || match.mapName === mapFilter;
+      const civMatch = civFilter === 'all' || match.participants.some((participant) => (playerLookup[participant.id]?.civilization ?? '') === civFilter);
+      const playerMatch = playerFilter === 'all' || match.participants.some((participant) => Number(participant.id) === Number(playerFilter));
+      return mapMatch && civMatch && playerMatch;
+    },
+    [civFilter, mapFilter, playerFilter, playerLookup],
+  );
+
+  const upcomingMatches = useMemo(
+    () => allMatches.filter((item) => item.status !== 'completed' && matchesBySelectedFilters(item)),
+    [allMatches, matchesBySelectedFilters],
+  );
+  const overviewMatches = useMemo(() => upcomingMatches.slice(0, 3), [upcomingMatches]);
+  const filteredScheduleMatches = useMemo(
+    () => allMatches.filter((match) => {
+      const searchMatch = !search || `${match.round} ${match.mapName} ${match.tournament ?? ''}`.toLowerCase().includes(search.toLowerCase());
+      return searchMatch && matchesBySelectedFilters(match);
+    }),
+    [allMatches, matchesBySelectedFilters, search],
+  );
+
+  const summary = dashboard?.summary ?? {};
+  const topCivItems = (dashboard?.insights?.topCivilizations ?? []).map((entry) => ({
+    label: String(entry.civilization ?? '').slice(0, 3).toUpperCase() || 'CIV',
+    value: Number(entry.players ?? 0),
+  }));
+  const topCiv = dashboard?.insights?.topCivilizations?.[0] ?? null;
 
   function openTournament(id) {
     setSelectedId(id);
@@ -267,6 +277,51 @@ function App() {
               <StatCard label="Élő esemény" value={dashboard.counts.live} icon={<Activity size={18} />} delta="most zajlik" tone="mint" />
               <StatCard label="Regisztrált játékos" value={dashboard.counts.players} icon={<Users size={18} />} delta="a közösségi körben" tone="blue" />
               <StatCard label="Lejátszott meccs" value={dashboard.counts.completedMatches} icon={<Swords size={18} />} delta={`${dashboard.counts.scheduledMatches} van hátra`} tone="gold" />
+              <StatCard label="Átlag win rate" value={`${Number(summary.averageWinRate ?? 0).toFixed(1)}%`} icon={<Award size={18} />} delta="játékosok teljesítménye" tone="blue" />
+              <StatCard label="ELO spread" value={summary.eloSpread ?? 0} icon={<Trophy size={18} />} delta={`peak ${summary.peakElo ?? 0}`} tone="terra" />
+            </section>
+            <section className="chart-grid">
+              <article className="panel chart-panel">
+                <div className="panel-heading">
+                  <div><span className="eyebrow">Trend</span><h2>Legnépszerűbb civ</h2></div>
+                  <span className="subtle-tag">Top 4</span>
+                </div>
+                <MiniBarChart items={topCivItems.length ? topCivItems : [{ label: 'CIV', value: 0 }]} color="#7aa9ff" />
+              </article>
+              <article className="panel chart-panel">
+                <div className="panel-heading">
+                  <div><span className="eyebrow">Aktivitás</span><h2>Játszma-arány</h2></div>
+                  <span className="subtle-tag">Szezon</span>
+                </div>
+                <RingGauge value={Math.min(100, Math.round(((dashboard.counts.completedMatches ?? 0) / Math.max(1, (dashboard.counts.completedMatches ?? 0) + (dashboard.counts.scheduledMatches ?? 0))) * 100))} total={100} label="lejátszott" color="#5fe0c0" />
+              </article>
+            </section>
+            <section className="pulse-grid">
+              <article className="panel pulse-card">
+                <div className="panel-heading"><div><span className="eyebrow">Top form</span><h2>Játékosok</h2></div></div>
+                <div className="info-list">
+                  {(dashboard.insights?.topPlayers ?? []).slice(0, 3).map((player) => (
+                    <div className="info-row" key={player.id}><div className="info-meta"><strong>{player.handle}</strong><span>{player.civilization}</span></div><span className="pill-metric">{player.elo} ELO</span></div>
+                  ))}
+                </div>
+              </article>
+              <article className="panel pulse-card">
+                <div className="panel-heading"><div><span className="eyebrow">Map trend</span><h2>Legnépszerűbb pályák</h2></div></div>
+                <div className="info-list">
+                  {(dashboard.insights?.topMaps ?? []).slice(0, 3).map((map, index) => (
+                    <div className="info-row" key={map.mapName}><div className="info-meta"><strong>#{index + 1} {map.mapName}</strong><span>{map.games} játszma</span></div><span className="pill-metric">{map.games}x</span></div>
+                  ))}
+                </div>
+              </article>
+              <article className="panel pulse-card">
+                <div className="panel-heading"><div><span className="eyebrow">Szezon</span><h2>Pulse</h2></div></div>
+                <div className="info-list compact">
+                  <div className="info-row"><div className="info-meta"><strong>Nyitott nevezések</strong><span>Aktuális szezonban</span></div><span className="pill-metric">{dashboard.summary?.registrationsOpen ?? 0}</span></div>
+                  <div className="info-row"><div className="info-meta"><strong>Hamarosan</strong><span>Felkészülő események</span></div><span className="pill-metric">{dashboard.summary?.upcomingEvents ?? 0}</span></div>
+                  <div className="info-row"><div className="info-meta"><strong>Leggyakoribb civ</strong><span>{topCiv?.civilization ?? 'n/a'}</span></div><span className="pill-metric">{topCiv?.players ?? 0}</span></div>
+                  <div className="info-row"><div className="info-meta"><strong>Átlagos szint</strong><span>Win rate</span></div><span className="pill-metric">{(dashboard.summary?.averageWinRate ?? 0).toFixed(1)}%</span></div>
+                </div>
+              </article>
             </section>
             <div className="quick-filters">
               <div className="filter-group compact"><span>Pálya</span><select value={mapFilter} onChange={(event) => setMapFilter(event.target.value)}><option value="all">Mind</option>{mapOptions.map((mapName) => <option key={mapName} value={mapName}>{mapName}</option>)}</select></div>
@@ -339,6 +394,45 @@ function App() {
       {dialog?.type === 'result' && <Modal eyebrow="Eredményrögzítés" title="Meccs lezárása" onClose={() => setDialog(null)} wide><form className="form-stack" onSubmit={submitAction}><div className="result-context"><span>{dialog.match.round}</span><strong>{dialog.match.mapName}</strong><small>{dialog.match.tournament}</small></div><label>Map<input name="mapName" required defaultValue={dialog.match.mapName} /></label><div className="score-grid"><div className="score-head"><span>JÁTÉKOS</span><span>CIVILIZÁCIÓ</span><span>PONTSZÁM</span></div>{dialog.match.participants.map((player) => <div className="score-row" key={player.id}><strong>{player.handle}</strong><span>{player.civilization}</span><input data-score-player={player.id} type="number" min="0" max="99" defaultValue={player.score ?? 0} required aria-label={`${player.handle} pontszáma`} /></div>)}</div><div className="modal-actions"><button className="button button-secondary" type="button" onClick={() => setDialog(null)}>Mégse</button><button className="button button-primary" disabled={busy}><Check size={16} /> Eredmény mentése</button></div></form></Modal>}
     </div>
     </TranslationLayer>
+  );
+}
+
+function MiniBarChart({ items, color = '#ff7853' }) {
+  const maxValue = Math.max(1, ...items.map((item) => item.value));
+  return (
+    <div className="mini-chart">
+      <svg viewBox="0 0 320 110" preserveAspectRatio="none" aria-label="Mini chart">
+        <defs>
+          <linearGradient id="miniChartFill" x1="0" x2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.8" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.3" />
+          </linearGradient>
+        </defs>
+        {items.map((item, index) => {
+          const barHeight = (item.value / maxValue) * 70;
+          const x = 24 + index * 60;
+          const y = 86 - barHeight;
+          return (
+            <g key={`${item.label}-${index}`}>
+              <rect x={x} y={y} width={20} height={barHeight} rx={8} fill="url(#miniChartFill)" opacity="0.9" />
+              <text x={x + 10} y={102} textAnchor="middle" fill="#8ea1a3" fontSize="9">{item.label}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function RingGauge({ value, total, label, color }) {
+  const percentage = Math.min(100, Math.max(0, (value / total) * 100));
+  return (
+    <div className="ring-meter" style={{ background: `conic-gradient(${color} 0 ${percentage}%, rgba(255,255,255,0.08) ${percentage}% 100%)` }}>
+      <div className="ring-core">
+        <strong>{percentage}%</strong>
+        <span>{label}</span>
+      </div>
+    </div>
   );
 }
 

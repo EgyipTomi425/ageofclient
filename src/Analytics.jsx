@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { BarChart3, Map, Swords, Trophy } from 'lucide-react';
+import { apiRequest } from './api.js';
 import { CIV_FLAGS, MAP_ART } from './gameAssets.js';
 import { TranslationLayer, translateText, useLanguage } from './i18n.js';
 
-const API = '/age3ofserver/api';
 const TABS = [
   { id: 'civilizations', label: 'Civilizációk', icon: Trophy },
   { id: 'maps', label: 'Pályák', icon: Map },
@@ -11,10 +11,7 @@ const TABS = [
 ];
 
 async function loadAnalytics() {
-  const response = await fetch(`${API}/analytics`);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-  return data;
+  return apiRequest('/analytics', {}, { enabled: true, ttlMs: 20000 });
 }
 
 function CivFlag({ civilization }) {

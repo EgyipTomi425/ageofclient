@@ -1,19 +1,8 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, RefreshCw } from 'lucide-react';
+import { apiRequest } from './api.js';
 import { CIV_FLAGS, MAP_ART } from './gameAssets.js';
 import { TranslationLayer, useLanguage } from './i18n.js';
-
-const API = '/age3ofserver/api';
-
-async function apiRequest(path, options) {
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-  return data;
-}
 
 function CivPick({ participant }) {
   const flag = CIV_FLAGS[participant.civilization];
