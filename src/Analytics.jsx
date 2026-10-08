@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BarChart3, Map, Swords, Trophy } from 'lucide-react';
+import { BarChart3, Flame, Map, Swords, Target, TrendingUp, Trophy } from 'lucide-react';
 import { apiRequest } from './api.js';
 import { CIV_FLAGS, MAP_ART } from './gameAssets.js';
 import { TranslationLayer, translateText, useLanguage } from './i18n.js';
@@ -49,6 +49,11 @@ export default function Analytics() {
   const civilizations = (data?.civilizations ?? []).filter((item) => item.games >= minimumGames);
   const civNames = [...new Set((data?.civilizations ?? []).map((item) => item.civilization))];
   const matchups = (data?.matchups ?? []).filter((item) => item.games >= minimumGames && (matchupFilter === 'all' || item.civilization === matchupFilter));
+  const topCiv = civilizations[0] ?? null;
+  const totalRecordedGames = civilizations.reduce((sum, item) => sum + item.games, 0) || 0;
+  const avgWinRate = civilizations.length ? civilizations.reduce((sum, item) => sum + item.winRate, 0) / civilizations.length : 0;
+  const bestMap = (data?.maps ?? []).reduce((best, item) => (!best || item.games > best.games ? item : best), null);
+  const strongestMatchup = matchups[0] ?? null;
 
   return (
     <TranslationLayer language={language}>
@@ -66,6 +71,41 @@ export default function Analytics() {
       </div>
       {error ? <div className="empty-inline">Az analitika nem tölthető be: {error}</div> : !data ? <div className="loading-state"><span className="spinner" /> Analitika betöltése</div> : (
         <section className="panel analytics-panel">
+          <div className="analytics-summary-grid">
+            <div className="analytics-summary-card">
+              <span className="analytics-summary-icon"><Trophy size={15} /></span>
+              <div>
+                <small>Top civ</small>
+                <strong>{topCiv ? topCiv.civilization : '—'}</strong>
+                <span>{topCiv ? `${topCiv.winRate.toFixed(1)}% WR` : 'Nincs adat'}</span>
+              </div>
+            </div>
+            <div className="analytics-summary-card">
+              <span className="analytics-summary-icon"><Map size={15} /></span>
+              <div>
+                <small>Legnépszerűbb map</small>
+                <strong>{bestMap ? bestMap.mapName : '—'}</strong>
+                <span>{bestMap ? `${bestMap.games} already played` : 'Nincs adat'}</span>
+              </div>
+            </div>
+            <div className="analytics-summary-card">
+              <span className="analytics-summary-icon"><TrendingUp size={15} /></span>
+              <div>
+                <small>Átlag win rate</small>
+                <strong>{avgWinRate ? `${avgWinRate.toFixed(1)}%` : '0.0%'}</strong>
+                <span>{totalRecordedGames} összesített játék</span>
+              </div>
+            </div>
+            <div className="analytics-summary-card">
+              <span className="analytics-summary-icon"><Flame size={15} /></span>
+              <div>
+                <small>Legjobb matchup</small>
+                <strong>{strongestMatchup ? strongestMatchup.civilization : '—'}</strong>
+                <span>{strongestMatchup ? `${strongestMatchup.games} match · ${strongestMatchup.wins} win` : 'Nincs adat'}</span>
+              </div>
+            </div>
+          </div>
+
           {activeTab === 'civilizations' && <>
             <div className="panel-heading"><div><span className="eyebrow">Összesített eredmény</span><h2>Civ rangsor</h2></div><span className="subtle-tag">Lezárt játszmák</span></div>
             <StatTable headings={['#', 'CIVILIZÁCIÓ', 'JÁTSZMA', 'GYŐZELEM', 'GYŐZELMI ARÁNY']} rows={civilizations.map((item, index) => <tr key={item.civilization}><td className="rank-cell">{String(index + 1).padStart(2, '0')}</td><td><span className="analytics-civ"><CivFlag civilization={item.civilization} />{item.civilization}</span></td><td>{item.games}{item.games < 5 && <span className="sample-warning">{language === 'en' ? 'low sample' : 'kis minta'}</span>}</td><td>{item.wins}</td><td><span className="rate-cell">{item.winRate.toFixed(1)}%</span></td></tr>)} empty="Még nincs elég rögzített mintajátszma." />

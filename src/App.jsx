@@ -31,6 +31,20 @@ function flagFor(country) {
   return Array.from(code).map((character) => String.fromCodePoint(character.charCodeAt(0) + 127397)).join('');
 }
 
+function civLabel(value, index = 0) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return `CIV ${index + 1}`;
+
+  const lettersOnly = raw.replace(/[^A-Za-z]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!lettersOnly) return `CIV ${index + 1}`;
+
+  const compact = lettersOnly.split(' ').filter(Boolean).slice(0, 2).map((part) => part.slice(0, 3).toUpperCase()).join('');
+  const tooNoisy = raw.length > 14 || (raw.match(/\d/g) || []).length >= 2;
+
+  if (tooNoisy) return compact || `CIV ${index + 1}`;
+  return lettersOnly.length <= 6 ? lettersOnly.toUpperCase() : lettersOnly.slice(0, 6).toUpperCase();
+}
+
 function eloDeltaText(value) {
   if (value == null || Number.isNaN(Number(value))) return '—';
   const delta = Number(value);
@@ -214,11 +228,16 @@ function App() {
   );
 
   const summary = dashboard?.summary ?? {};
-  const topCivItems = (dashboard?.insights?.topCivilizations ?? []).map((entry) => ({
-    label: String(entry.civilization ?? '').slice(0, 3).toUpperCase() || 'CIV',
+  const topCivItems = (dashboard?.insights?.topCivilizations ?? []).map((entry, index) => ({
+    label: civLabel(entry.civilization, index),
     value: Number(entry.players ?? 0),
   }));
   const topCiv = dashboard?.insights?.topCivilizations?.[0] ?? null;
+  const momentumSeries = useMemo(() => {
+    const topPlayers = dashboard?.insights?.topPlayers ?? [];
+    if (!topPlayers.length) return [42, 48, 52, 51, 58, 64, 68, 72];
+    return topPlayers.slice(0, 8).map((player, index) => Math.min(100, Math.max(35, player.elo / 16 + index * 5)));
+  }, [dashboard]);
 
   function openTournament(id) {
     setSelectedId(id);
@@ -286,7 +305,7 @@ function App() {
                   <div><span className="eyebrow">Trend</span><h2>Legnépszerűbb civ</h2></div>
                   <span className="subtle-tag">Top 4</span>
                 </div>
-                <MiniBarChart items={topCivItems.length ? topCivItems : [{ label: 'CIV', value: 0 }]} color="#7aa9ff" />
+                <TopCivChart items={topCivItems.length ? topCivItems : [{ label: 'CIV', value: 0 }]} color="#7aa9ff" />
               </article>
               <article className="panel chart-panel">
                 <div className="panel-heading">
@@ -294,6 +313,53 @@ function App() {
                   <span className="subtle-tag">Szezon</span>
                 </div>
                 <RingGauge value={Math.min(100, Math.round(((dashboard.counts.completedMatches ?? 0) / Math.max(1, (dashboard.counts.completedMatches ?? 0) + (dashboard.counts.scheduledMatches ?? 0))) * 100))} total={100} label="lejátszott" color="#5fe0c0" />
+              </article>
+            </section>
+            <section className="premium-grid">
+              <article className="panel premium-panel">
+                <div className="panel-heading">
+                  <div><span className="eyebrow">Momentum</span><h2>Competitive momentum</h2></div>
+                  <span className="subtle-tag">Last 8</span>
+                </div>
+                <div className="premium-hero">
+                  <div>
+                    <span className="premium-kicker">Szezon trend</span>
+                    <strong>{Math.round((momentumSeries.at(-1) ?? 0))}%</strong>
+                    <p>Versenyképesség a legjobb játékosok körében.</p>
+                  </div>
+                  <TrendSparkline values={momentumSeries} color="#ff7853" />
+                </div>
+                <div className="premium-metrics">
+                  <div className="premium-metric">
+                    <span>Peak ELO</span>
+                    <strong>{summary.peakElo ?? 0}</strong>
+                  </div>
+                  <div className="premium-metric">
+                    <span>Win rate</span>
+                    <strong>{(summary.averageWinRate ?? 0).toFixed(1)}%</strong>
+                  </div>
+                  <div className="premium-metric">
+                    <span>Upcoming</span>
+                    <strong>{summary.upcomingEvents ?? 0}</strong>
+                  </div>
+                </div>
+              </article>
+              <article className="panel premium-side">
+                <div className="panel-heading">
+                  <div><span className="eyebrow">Top performance</span><h2>Front runners</h2></div>
+                </div>
+                <div className="mini-rank-list">
+                  {(dashboard.insights?.topPlayers ?? []).slice(0, 4).map((player, index) => (
+                    <div className="mini-rank-item" key={player.id}>
+                      <span className="mini-rank">#{index + 1}</span>
+                      <div>
+                        <strong>{player.handle}</strong>
+                        <small>{player.civilization}</small>
+                      </div>
+                      <em>{player.elo}</em>
+                    </div>
+                  ))}
+                </div>
               </article>
             </section>
             <section className="pulse-grid">
@@ -397,29 +463,45 @@ function App() {
   );
 }
 
-function MiniBarChart({ items, color = '#ff7853' }) {
+function TrendSparkline({ values, color = '#ff7853' }) {
+  if (!values.length) return null;
+  const width = 420;
+  const height = 130;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const points = values.map((value, index) => {
+    const x = (index / Math.max(1, values.length - 1)) * width;
+    const y = height - ((value - min) / Math.max(1, max - min)) * (height - 18) - 8;
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-label="Trend chart">
+      <defs>
+        <linearGradient id="sparklineFill" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.32" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polyline fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" points={points} />
+      <polygon points={`0,${height} ${points} ${width},${height}`} fill="url(#sparklineFill)" opacity="0.9" />
+    </svg>
+  );
+}
+
+function TopCivChart({ items, color = '#7aa9ff' }) {
   const maxValue = Math.max(1, ...items.map((item) => item.value));
   return (
-    <div className="mini-chart">
-      <svg viewBox="0 0 320 110" preserveAspectRatio="none" aria-label="Mini chart">
-        <defs>
-          <linearGradient id="miniChartFill" x1="0" x2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.8" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.3" />
-          </linearGradient>
-        </defs>
-        {items.map((item, index) => {
-          const barHeight = (item.value / maxValue) * 70;
-          const x = 24 + index * 60;
-          const y = 86 - barHeight;
-          return (
-            <g key={`${item.label}-${index}`}>
-              <rect x={x} y={y} width={20} height={barHeight} rx={8} fill="url(#miniChartFill)" opacity="0.9" />
-              <text x={x + 10} y={102} textAnchor="middle" fill="#8ea1a3" fontSize="9">{item.label}</text>
-            </g>
-          );
-        })}
-      </svg>
+    <div className="civ-bar-chart" aria-label="Top civilizations chart">
+      {items.map((item, index) => (
+        <div className="civ-bar-row" key={`${item.label}-${index}`}>
+          <span className="civ-bar-label">{item.label}</span>
+          <div className="civ-bar-track">
+            <span className="civ-bar-fill" style={{ width: `${(item.value / maxValue) * 100}%`, background: color }} />
+          </div>
+          <span className="civ-bar-value">{item.value}</span>
+        </div>
+      ))}
     </div>
   );
 }
